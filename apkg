@@ -1,0 +1,248 @@
+#!/bin/bash
+#
+#                _
+#     __ _ _ __ | | ____ _
+#    / _` | '_ \| |/ / _` |
+#   | (_| | |_) |   < (_| |
+#    \__,_| .__/|_|\_\__, |
+#         |_|        |___/
+#
+# apkg is for stuff, and things
+
+#### DIALOG STATUS
+DIALOG_OK=0
+DIALOG_EXTRA=3
+DIALOG_CANCEL=1
+DIALOG_ESC=255
+HEIGHT=30
+WIDTH=50
+
+#### VARIABLE COUNTERS
+II_PROG=$(dpkg-query -l | grep '^i' | awk '{print $2}' | grep -vc lib)
+II_LIB=$(dpkg-query -l | grep '^i' | awk '{print $2}' | grep -c lib)
+RC_PKGS=$(dpkg-query -l | grep -c '^r' )
+UN_PKGS=$(dpkg-query -l '*' | grep -c '^u')
+II_TTL=$(dpkg-query -l | grep -c '^i')
+
+#### VARIABLE FILES
+PKGS_LOG="$HOME/log/$HOSTNAME-$(date +%F)-packages.log"
+APP_LST="/tmp/app_lst.temp"
+LIB_LST="/tmp/lib_lst.temp"
+PKG_LST="/tmp/pkgs-lst.temp"
+RDIO_OPT="/tmp/rdio-opt.tmp"
+RDIO_SEL="/tmp/rdio-sel.tmp"
+SEL_DESCR="/tmp/sel-descr.tmp"
+MANPG="/tmp/manpg.temp"
+
+#### BOXES
+txt_box () { dialog --title "$1" --textbox "$2" 0 0 ;  }
+msg_box () { dialog --msgbox "$1" 10 30 ; }
+
+save_pkgs_log () {
+  dpkg-query -l | grep '^i' | awk '{print $2}' > "$PKGS_LOG"
+}
+
+app_log () {
+  dpkg-query -l | grep '^i' | awk '{print $2}' | grep -v lib >"$APP_LST"
+  txt_box "Programs" "$APP_LST"
+  rm "$APP_LST"
+}
+
+lib_log () {
+  dpkg-query -l | grep '^i' | awk '{print $2}' | grep lib | sed 's/\:.*//g' > "$LIB_LST"
+  txt_box "Libraries" "$LIB_LST"  30 60
+  rm "$LIB_LST"
+}
+
+pkg_descr () {
+  if [[ -n $(cat "$RDIO_SEL") ]]; then
+      apt-cache show "$(cat "$RDIO_SEL")" | grep -A15 Description-en \
+      > "$SEL_DESCR"
+
+    echo -e \\n"######## Local README's ####################"\\n \
+      >> "$SEL_DESCR"
+
+    dpkg -L "$(cat "$RDIO_SEL")" | grep README \
+      >> "$SEL_DESCR" || echo "No Local README files." \
+        >> "$SEL_DESCR"
+
+    echo -e \\n"######## Installed Files ####################"\\n \
+      >> "$SEL_DESCR"
+
+    dpkg -L "$(cat "$RDIO_SEL")" | grep -v README \
+      >> "$SEL_DESCR"
+  else
+    DESCR_ERROR="Nothing Selected"
+  fi
+}
+
+
+
+get_site () {
+  if [[ -n $(cat "$RDIO_SEL") ]]; then
+    SITE=$(apt-cache show $(cat "$RDIO_SEL") | grep '\<http.*\>' | awk '{print $2}' )
+      if [[ -z $SITE ]]; then
+         SITE_ERROR="   \n\n        Homepage \n       Not Listed"
+      fi
+  else
+    SITE_ERROR="    \n\n       You did not \n    select an option."
+  fi
+}
+
+#### Man Pager
+man_info () {
+  man "$(cat "$RDIO_SEL")" > "$MANPG"
+  txt_box "$(cat "$RDIO_SEL")" "$MANPG"
+rm $MANPG
+}
+
+#### Description Pager
+info_box () {
+    dialog \
+        --clear \
+        --title "$(cat "$RDIO_SEL")" \
+        --ok-label "Back to List" \
+        --extra-button \
+        --extra-label "Man page" \
+        --help-button \
+        --help-label "README's" \
+        --cancel-label "yo" \
+        --textbox "$SEL_DESCR" 0 0
+        select=$?
+
+    case $select in
+      $DIALOG_OK)
+        clear
+        rm "$SEL_DESCR" && pkg_rdio 
+        ;;
+      $DIALOG_EXTRA)
+        clear
+        man_info && info_box "$SEL_DESCR"
+        ;;
+      $DIALOG_CANCEL)
+        clear
+        rm "$SEL_DESCR" && pkg_rdio
+        ;;
+      $DIALOG_ESC)
+        clear
+        rm "$SEL_DESCR" "$RDIO_SEL"
+        echo "Exit From Info." >&2
+        exit
+        ;;
+    esac
+}
+#### PACKAGE MENU
+pkg_rdio () {
+  dpkg-query -l | grep '^i' | awk '{print $2}' | sed 's/\:.*//g' > "$PKG_LST"
+
+  PKG_COUNT=1
+  for PKG in $(cat $PKG_LST); do
+    echo "$PKG $PKG_COUNT off" >> "$RDIO_OPT"
+    PKG_COUNT=$[PKG_COUNT+1]
+  done
+
+  rm "$PKG_LST"
+
+  dialog \
+          --title "CHOOSE" \
+          --clear \
+          --ok-label "Description" \
+          --extra-button --extra-label "Homepage" \
+          --cancel-label "Back to Main Menu" \
+          --help-button \
+          --radiolist "View Package Description or Visit Homepage" 0 0 0 \
+              $(cat "$RDIO_OPT") 2>"$RDIO_SEL"
+  select=$?
+    rm "$RDIO_OPT" #"$rdio_sel"
+
+  case $select in
+    $DIALOG_OK)
+      pkg_descr
+      if [[ -f $SEL_DESCR ]]; then
+        info_box "$SEL_DESCR"
+      else
+        msg_box "$DESCR_ERROR" && pkg_rdio
+      fi
+      ;;
+    $DIALOG_EXTRA)
+      get_site $(cat "$RDIO_SEL")
+      if [[ -n $SITE ]]; then
+        xdg-open "$SITE" &
+        unset SITE
+        pkg_rdio
+      else
+        msg_box "$SITE_ERROR" && pkg_rdio
+      fi
+      ;;
+    $DIALOG_CANCEL)
+      rm "$RDIO_SEL"
+      clear
+      mainmenu
+      ;;
+    $DIALOG_ESC)
+      rm "$RDIO_SEL"
+      clear
+      echo "esc from pkg rdio." >&2
+      exit
+        ;;
+    esac
+}
+
+#### MAIN MENU
+mainmenu () {
+  while true; do
+    exec 3>&1
+    selection=$(dialog \
+                  --backtitle "System Information" \
+                  --title "APKG" \
+                  --clear \
+                  --extra-button \
+                  --cancel-label "Exit" \
+                  --menu \
+        "\n
+        apps:$II_PROG   rc:$RC_PKGS un:$UN_PKGS\n\
+        libs:$II_LIB\n\
+        total:$II_TTL\n\
+        \n"\
+                  $HEIGHT $WIDTH 10 \
+                    "1" "Application's Package List" \
+                    "2" "Library's Package List" \
+                    "3" "Save Installed Packages Log" \
+                    "4" "Installed Packages Info" \
+                      2>&1 1>&3)
+                  exit_status=$?
+                  exec 3>&-
+                case $exit_status in
+                  $DIALOG_CANCEL)
+                    clear
+                    echo "Program termed."
+                    exit
+                    ;;
+                  $DIALOG_ESC)
+                    clear
+                    echo "exit from main." >&2
+                    exit
+                    ;;
+                esac
+                case $selection in
+                  0)
+                    clear
+                    echo "Program terminated."
+                    ;;
+                  1)
+                    app_log
+                    ;;
+                  2)
+                    lib_log
+                    ;;
+                  3)
+                    save_pkgs_log
+                    ;;
+                  4)
+                    pkg_rdio
+                    ;;
+                esac
+  done
+}
+
+mainmenu
